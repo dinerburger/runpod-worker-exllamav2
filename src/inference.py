@@ -37,6 +37,7 @@ class Predictor:
         config = ExLlamaV2Config()
         config.model_dir = model_directory
         config.prepare()
+        config.max_seq_len = 4096
 
         self.tokenizer = ExLlamaV2Tokenizer(config)
         self.model = ExLlamaV2(config)
