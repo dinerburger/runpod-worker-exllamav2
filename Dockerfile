@@ -1,32 +1,35 @@
 # Base image
-FROM runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-# Use bash shell with pipefail option
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-# Set the working directory
-WORKDIR /
-
-
-# Prepare the models inside the docker image
-ARG HUGGING_FACE_HUB_TOKEN=
-ENV HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN
-
-# Prepare argument for the model and tokenizer
-ARG MODEL_NAME=""
-ENV MODEL_NAME=$MODEL_NAME
-ARG MODEL_REVISION="main"
-ENV MODEL_REVISION=$MODEL_REVISION
-ARG MODEL_BASE_PATH="/runpod-volume/"
-ENV MODEL_BASE_PATH=$MODEL_BASE_PATH
-
-# Install Python dependencies (Worker Template)
 COPY builder/requirements.txt /requirements.txt
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --upgrade -r /requirements.txt --no-cache-dir && \
-    rm /requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --upgrade pip && \
+    python3 -m pip install --upgrade -r /requirements.txt
 
-# Add src files (Worker Template)
-ADD src .
+ARG MODEL_NAME=""
+ARG BASE_PATH="/runpod-volume"
+ARG MODEL_REVISION=""
+ARG KV_CACHE_QUANT="FP16"
 
-CMD ["bin/bash", "entrypoint.sh"]
+ENV MODEL_NAME=$MODEL_NAME \
+    MODEL_REVISION=$MODEL_REVISION \
+    BASE_PATH=$BASE_PATH \
+    KV_CACHE_QUANT=$KV_CACHE_QUANT \
+    HF_DATASETS_CACHE="${BASE_PATH}/huggingface-cache/datasets" \
+    HUGGINGFACE_HUB_CACHE="${BASE_PATH}/huggingface-cache/hub" \
+    HF_HOME="${BASE_PATH}/huggingface-cache/hub" \
+    HF_HUB_ENABLE_HF_TRANSFER=0 
+
+ENV PYTHONPATH="/:/exllama2-workspace"
+
+COPY src /src
+RUN --mount=type=secret,id=HF_TOKEN,required=false \
+    if [ -f /run/secrets/HF_TOKEN ]; then \
+        export HF_TOKEN=$(cat /run/secrets/HF_TOKEN); \
+    fi && \
+    if [ -n "$MODEL_NAME" ]; then \
+        python3 /src/download_model.py; \
+    fi
+
+# Start the handler
+CMD ["python3", "/src/handler.py"]

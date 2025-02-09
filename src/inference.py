@@ -1,12 +1,22 @@
 import os
-from exllamav2.model import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Lora
-from exllamav2.tokenizer import ExLlamaV2Tokenizer
+from exllamav2 import (
+  ExLlamaV2Tokenizer, 
+  ExLlamaV2, 
+  ExLlamaV2Config, 
+  ExLlamaV2Lora, 
+  ExLlamaV2Cache, 
+  ExLlamaV2Cache_8bit, 
+  ExLlamaV2Cache_Q8, 
+  ExLlamaV2Cache_Q4, 
+  ExLlamaV2Cache_Q6
+)
 from exllamav2.generator import (
     ExLlamaV2Sampler,
     ExLlamaV2StreamingGenerator,
 )
-from download_model import download_model
 import time
+import logging
+import json
 
 MODEL_NAME = os.environ.get("MODEL_NAME")
 MODEL_REVISION = os.environ.get("MODEL_REVISION", "main")
@@ -14,35 +24,52 @@ LORA_NAME = os.environ.get("LORA_ADAPTER_NAME", None)
 LORA_REVISION = os.environ.get("LORA_ADAPTER_REVISION", "main")
 MODEL_BASE_PATH = os.environ.get("MODEL_BASE_PATH", "/runpod-volume/")
 
+def get_local_args():
+    """
+    Retrieve local arguments from a JSON file.
+
+    Returns:
+        dict: Local arguments.
+    """
+    if not os.path.exists("./local_model_args.json"):
+        return {}
+
+    with open("./local_model_args.json", "r") as f:
+        local_args = json.load(f)
+
+    if local_args.get("MODEL_NAME") is None:
+        raise ValueError("Model name not found in /local_model_args.json. There was a problem when baking the model in.")
+
+    logging.info(f"Using baked in model with args: {local_args}")
+    return local_args
 
 class Predictor:
     def setup(self):
-        # Model moved to network storage
-        model_directory = f"{MODEL_BASE_PATH}{MODEL_NAME.split('/')[1]}"
-
-        # check if model directory exists. else, download model
-        if not os.path.isdir(model_directory):
-            print("Downloading model...")
-            try:
-                download_model(model_name=MODEL_NAME, model_revision=MODEL_REVISION)
-                if LORA_NAME is not None:
-                    download_model(model_name=LORA_NAME, model_revision=LORA_REVISION)
-            except Exception as e:
-                print(f"Error downloading model: {e}")
-                # delete model directory if it exists
-                if os.path.isdir(model_directory):
-                    os.system(f"rm -rf {model_directory}")
-                raise e
+        args = get_local_args()
+        model_name = args.get("MODEL_NAME")
+        model_directory = f"{MODEL_BASE_PATH}/{model_name}"
 
         config = ExLlamaV2Config()
         config.model_dir = model_directory
         config.prepare()
-        config.max_seq_len = 4096
 
         self.tokenizer = ExLlamaV2Tokenizer(config)
         self.model = ExLlamaV2(config)
         self.model.load()
-        self.cache = ExLlamaV2Cache(self.model)
+        
+        cache_type: str = args.get("KV_CACHE_QUANT", "FP16").upper()
+        if cache_type == "Q4":
+            self.cache = ExLlamaV2Cache_Q4(self.model)
+        elif cache_type == "Q6":
+            self.cache = ExLlamaV2Cache_Q6(self.model)
+        elif cache_type == "Q8":
+            self.cache = ExLlamaV2Cache_Q8(self.model)
+        elif cache_type == "FP8":
+            self.cache = ExLlamaV2Cache_8bit(self.model)
+        else:
+            self.cache = ExLlamaV2Cache(self.model)
+        
+
         self.settings = ExLlamaV2Sampler.Settings()
 
         # Load LORA adapter if specified
@@ -54,11 +81,22 @@ class Predictor:
     def predict(self, settings):
         ### Set the generation settings
         self.settings.temperature = settings["temperature"]
+        self.settings.smoothing_factor = settings["smoothing_factor"]
+        self.settings.min_temp = settings["min_temp"]
+        self.settings.max_temp = settings["max_temp"]
+        self.settings.temp_exponent = settings["temp_exponent"]
+
         self.settings.top_p = settings["top_p"]
         self.settings.top_k = settings["top_k"]
+        self.settings.top_a = settings["top_a"]
+        self.settings.min_p = settings["min_p"]
+
         self.settings.token_repetition_penalty = settings["token_repetition_penalty"]
         self.settings.token_repetition_range = settings["token_repetition_range"]
         self.settings.token_repetition_decay = settings["token_repetition_decay"]
+
+        self.settings.token_frequency_penalty = settings["token_frequency_penalty"]
+        self.settings.token_presence_penalty = settings["token_presence_penalty"]
 
         output = None
         time_begin = time.time()

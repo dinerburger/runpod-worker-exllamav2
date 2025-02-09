@@ -1,28 +1,27 @@
 import os
+import logging
+import glob
+import json
 from huggingface_hub import snapshot_download
+from utils import timer_decorator
 
-# Get the hugging face token
-HUGGING_FACE_HUB_TOKEN = os.environ.get("HUGGING_FACE_HUB_TOKEN", None)
+BASE_DIR="/"
 MODEL_BASE_PATH = os.environ.get("MODEL_BASE_PATH", "/runpod-volume/")
 
+@timer_decorator
+def download(name, revision, cache_dir):
+    return snapshot_download(name, revision=revision, cache_dir=cache_dir, local_dir=f"{MODEL_BASE_PATH}/{name}")
 
-def download_model(model_name: str, model_revision: str):
-    # Download the model from hugging face
-    download_kwargs = {}
-
-    if HUGGING_FACE_HUB_TOKEN:
-        download_kwargs["token"] = HUGGING_FACE_HUB_TOKEN
-
-    DOWNLOAD_PATH = f"{MODEL_BASE_PATH}{model_name.split('/')[1]}"
-
-    print(f"Downloading model to: {DOWNLOAD_PATH}")
-
-    downloaded_path = snapshot_download(
-        repo_id=model_name,
-        revision=model_revision,
-        local_dir=DOWNLOAD_PATH,
-        local_dir_use_symlinks=False,
-        **download_kwargs,
-    )
-
-    print(f"Finished downloading to: {downloaded_path}")
+if __name__ == "__main__":
+    cache_dir = os.getenv("HF_HOME")
+    model_name, model_revision = os.getenv("MODEL_NAME"), os.getenv("MODEL_REVISION") or None
+    cache_type = os.getenv("KV_CACHE_QUANT", "FP16")
+    model_path = download(model_name, model_revision, cache_dir)   
+    metadata = {
+        "MODEL_NAME": model_name,
+        "MODEL_REVISION": model_revision,
+        "KV_CACHE_QUANT": cache_type
+    }   
+    
+    with open(f"{BASE_DIR}/local_model_args.json", "w") as f:
+        json.dump({k: v for k, v in metadata.items() if v not in (None, "")}, f)
